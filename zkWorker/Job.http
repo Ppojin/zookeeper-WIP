@@ -1,0 +1,14 @@
+### create job
+POST http://localhost:8080/job
+Content-Type: application/json
+
+{
+  "id": 999,
+  "message": "content"
+}
+
+### start job
+GET http://localhost:8080/job/999/start
+
+### stop job
+GET http://localhost:8080/job/999/stop
