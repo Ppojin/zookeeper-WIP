@@ -71,13 +71,10 @@ public class TaskWatcher implements Watcher{
             }
         }
 
-        String path = event.getPath();
-        String eventType = event.getType().name();
-        String eventState = event.getState().name();
-        System.out.println("## process: (" +
-                "path:" + path + ", " +
-                "eventType:" + eventType + ", " +
-                "eventState:" + eventState +
+        log.info("## process: (" +
+                "path:" + event.getPath() + ", " +
+                "eventType:" + event.getType().name() + ", " +
+                "eventState:" + event.getState().name() +
         ")");
     }
 }
