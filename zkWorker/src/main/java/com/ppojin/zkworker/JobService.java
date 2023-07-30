@@ -71,7 +71,7 @@ public class JobService {
 
     public class jobExistsException extends Exception {
         public jobExistsException(String jobId) {
-            super("{} is already running!");
+            super("Job({}) is already running!");
         }
     }
 }

@@ -6,59 +6,38 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.zookeeper.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
-
-import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 
 @Slf4j
 @Component
 @Scope(value = ConfigurableBeanFactory.SCOPE_SINGLETON)
-public class TaskWatcher implements Watcher, AsyncCallback.ChildrenCallback {
-    @Getter
+public class AssignWatcher implements org.apache.zookeeper.Watcher, AsyncCallback.ChildrenCallback {
     private static ZooKeeper zk;
     private static String workerId;
-    private static String workerAssignPath;
-
-    final static CountDownLatch connectedSignal = new CountDownLatch(100);
-
+    private final static CountDownLatch connectedSignal = new CountDownLatch(100);
     private final JobService jobService;
 
-    public TaskWatcher(
+    public AssignWatcher(
             @Value("${zookeeper.host_names}") String hostNames,
             JobService jobService
     ) {
         this.jobService = jobService;
-
-        try {
-            zk = new ZooKeeper(hostNames, 5000, this);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Override
-    public void process(WatchedEvent event) {
-        if (event.getState() == Watcher.Event.KeeperState.SyncConnected){
-            if (Objects.isNull(workerId)) {
-                connectedSignal.countDown();
-                initializeSession();
-            } else if (event.getType() == Event.EventType.NodeChildrenChanged) {
-                zk.getChildren(workerAssignPath, true, this, "SYNCWORKS");
+        
+        if(zk == null){
+            try {
+                zk = new ZooKeeper(hostNames, 5000, this);
+                log.info("zookeeper session created");
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
         }
-
-        log.info("## process: (" +
-                "path:" + event.getPath() + ", " +
-                "eventType:" + event.getType().name() + ", " +
-                "eventState:" + event.getState().name() +
-        ")");
     }
 
     private void initializeSession() {
@@ -76,22 +55,45 @@ public class TaskWatcher implements Watcher, AsyncCallback.ChildrenCallback {
             }
 
             final String worker;
-            worker = zk.create(Consts.NODE_PATH + "/" + Consts.NODE_NAME, "".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+            worker = zk.create(
+                    Consts.NODE_PATH + "/" + Consts.NODE_NAME,
+                    new byte[0],
+                    ZooDefs.Ids.OPEN_ACL_UNSAFE,
+                    CreateMode.EPHEMERAL_SEQUENTIAL
+            );
             log.info("worknode '{}' created", worker);
             List<String> split = List.of(worker.split("/"));
             workerId = split.get(split.size() - 1);
-            workerAssignPath = Consts.ASSIGN_PATH + "/" + workerId;
-
-            try {
-                zk.create(workerAssignPath, "".getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-            } catch (KeeperException | InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-
-            zk.getChildren(Consts.ASSIGN_PATH, true);
+            zk.create(
+                    Consts.ASSIGN_PATH + "/" + workerId,
+                    new byte[0],
+                    ZooDefs.Ids.OPEN_ACL_UNSAFE,
+                    CreateMode.PERSISTENT
+            );
         } catch (KeeperException | InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public void process(WatchedEvent event) {
+        if (event.getType() == Event.EventType.NodeChildrenChanged) {
+            String workerAssignPath = Consts.ASSIGN_PATH + "/" + workerId;
+            if (workerAssignPath.equals(event.getPath())) {
+                zk.getChildren(workerAssignPath, true, this, "SYNCWORKS");
+            }
+        }
+        
+        if (event.getState() == org.apache.zookeeper.Watcher.Event.KeeperState.SyncConnected && workerId == null) {
+            connectedSignal.countDown();
+            initializeSession();
+        }
+
+        log.info("## process: (" +
+                "path:" + event.getPath() + ", " +
+                "eventType:" + event.getType().name() + ", " +
+                "eventState:" + event.getState().name() +
+                ")");
     }
 
     @Override
@@ -117,13 +119,13 @@ public class TaskWatcher implements Watcher, AsyncCallback.ChildrenCallback {
         List<String> starting = children.stream()
                 .filter(child -> !jobService.keys().contains(child))
                 .toList();
-        starting.forEach(child -> {
+        starting.forEach(zNode -> {
             try {
                 byte[] data = zk.getData(
-                        workerAssignPath + "/" + child, false, null
+                        Consts.ASSIGN_PATH + "/" + workerId + "/" + zNode, false, null
                 );
                 Job job = Job.builder()
-                        .id(child)
+                        .id(zNode)
                         .message(new String(data, StandardCharsets.UTF_8))
                         .build();
                 jobService.add(job);
